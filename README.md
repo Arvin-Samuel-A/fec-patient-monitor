@@ -2,8 +2,6 @@
 
 > **Fog–Edge–Cloud architecture** for real-time patient vital-sign monitoring with TLS 1.3 encryption, mutual TLS authentication, and Kubernetes orchestration.
 
-**Review-2 Milestone (~60%)**
-
 ---
 
 ## Table of Contents
@@ -492,5 +490,3 @@ If ports were not mapped, delete and recreate the cluster.
 
 ---
 
-**Course**: Fog-Edge-Cloud Computing (VIT)
-**Milestone**: Review-2 (~60%)
