@@ -1,0 +1,24 @@
+# ── Certificates (regenerated via scripts/gen-certs.sh) ──
+certs/
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+uv.lock
+
+# ── Go ──
+fog/fog-service
+
+# ── macOS ──
+.DS_Store
+*.swp
+
+# ── IDE ──
+.vscode/
+.idea/
+
+# ── Docker (local) ──
+*.tar

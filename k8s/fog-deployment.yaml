@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fog-service
+  labels:
+    app: fog-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fog-service
+  template:
+    metadata:
+      labels:
+        app: fog-service
+    spec:
+      containers:
+      - name: fog
+        image: fec-fog:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8444   # mTLS data ingestion
+        - containerPort: 8445   # plain HTTP: /alerts, /health
+        env:
+        - name: CA_CERT
+          value: /certs/ca/ca.crt
+        - name: SERVER_CERT
+          value: /certs/fog/fog.crt
+        - name: SERVER_KEY
+          value: /certs/fog/fog.key
+        - name: MTLS_PORT
+          value: "8444"
+        - name: HTTP_PORT
+          value: "8445"
+        volumeMounts:
+        # Each file is mounted individually via subPath.
+        # This ensures the Go code reads /certs/fog/fog.crt (a file path), not a directory.
+        - name: tls-certs
+          mountPath: /certs/fog/fog.crt
+          subPath: fog.crt
+          readOnly: true
+        - name: tls-certs
+          mountPath: /certs/fog/fog.key
+          subPath: fog.key
+          readOnly: true
+        - name: tls-certs
+          mountPath: /certs/ca/ca.crt
+          subPath: ca.crt
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8445      # plain HTTP — K8s probes cannot present mTLS client certs
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8445      # plain HTTP
+            scheme: HTTP
+          initialDelaySeconds: 3
+          periodSeconds: 5
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: fog-tls-secret
