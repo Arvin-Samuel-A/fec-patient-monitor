@@ -11,6 +11,7 @@ uv.lock
 
 # ── Go ──
 fog/fog-service
+fog/fog
 
 # ── macOS ──
 .DS_Store
@@ -22,3 +23,9 @@ fog/fog-service
 
 # ── Docker (local) ──
 *.tar
+.env
+
+# ── Lambda packaging artifacts ──
+lambda/notifier/build/
+lambda/notifier/notifier.zip
+lambda/notifier/.pack-venv/

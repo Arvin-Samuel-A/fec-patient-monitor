@@ -1,7 +1,7 @@
 """
-Edge service: validates, noise-filters, pseudonymizes, forwards to Fog via mTLS.
+Edge service: validates, noise-filters, pseudonymizes, forwards to Fog via HTTP.
 """
-import os, ssl, hashlib, time, logging
+import os, hashlib, time, logging
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, field_validator
 import httpx
@@ -12,12 +12,8 @@ log = logging.getLogger(__name__)
 app = FastAPI(title="FEC Edge Service")
 
 # ── Config from environment ──────────────────────────────────────────────────
-# FOG_URL uses host.docker.internal because on macOS Docker Desktop,
-# 127.0.0.1 inside a container refers to the container itself, not the Mac host.
-FOG_URL        = os.getenv("FOG_URL",        "https://host.docker.internal:30444/data")
-CA_CERT        = os.getenv("CA_CERT",        "/certs/ca/ca.crt")
-CLIENT_CERT    = os.getenv("CLIENT_CERT",    "/certs/client.crt")
-CLIENT_KEY     = os.getenv("CLIENT_KEY",     "/certs/client.key")
+# Set FOG_URL to the Fog machine IP/DNS in LAN setups.
+FOG_URL        = os.getenv("FOG_URL",        "http://127.0.0.1:8080/data")
 PSEUDONYM_SALT = os.getenv("PSEUDONYM_SALT", "fec-secret-salt-2024")
 
 
@@ -69,18 +65,9 @@ def noise_filter(device_id: str, payload: VitalPayload) -> bool:
     return True
 
 
-# ── mTLS client (TLS 1.3 requires post_handshake_auth for client certs) ────────
-def _build_mtls_ssl_context() -> ssl.SSLContext:
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-    ctx.load_verify_locations(CA_CERT)           # verify fog server cert
-    ctx.load_cert_chain(CLIENT_CERT, CLIENT_KEY) # present edge client cert
-    ctx.post_handshake_auth = True               # required for TLS 1.3 mTLS
-    return ctx
-
-def get_mtls_client() -> httpx.Client:
+# ── HTTP client to forward edge data to fog ─────────────────────────────────
+def get_fog_client() -> httpx.Client:
     return httpx.Client(
-        verify=_build_mtls_ssl_context(),
         timeout=5.0
     )
 
@@ -103,7 +90,7 @@ async def ingest(payload: VitalPayload, request: Request):
     log.info(f"Forwarding to fog: pseudo_id={sanitized['pseudo_id']}")
 
     try:
-        with get_mtls_client() as client:
+        with get_fog_client() as client:
             resp = client.post(FOG_URL, json=sanitized)
             resp.raise_for_status()
     except Exception as e:

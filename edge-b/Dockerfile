@@ -9,12 +9,10 @@ RUN uv pip install --system -r pyproject.toml
 
 COPY main.py .
 
-ENV PORT=9443
+ENV PORT=8082
 
 EXPOSE $PORT
 
 CMD uvicorn main:app \
     --host 0.0.0.0 \
-    --port $PORT \
-    --ssl-keyfile /certs/server.key \
-    --ssl-certfile /certs/server.crt
+    --port $PORT
