@@ -1,35 +1,30 @@
-# FEC Patient Health Monitoring (LAN HTTP Mode)
+# FEC Patient Health Monitoring (3-System LAN Deployment)
 
-Fog-Edge-Cloud patient monitoring system for LAN deployment:
+Fog-Edge-Cloud patient monitoring system deployed across three different systems in the same LAN:
 
-- IoT -> Edge over HTTP
-- Edge -> Fog over HTTP
+- System 1: Fog service on k3d (Kubernetes)
+- System 2: Edge service(s) in Docker
+- System 3: IoT simulator generating patient vitals
+
+Cloud integrations:
+
 - Fog writes readings and alerts to AWS S3
-- Fog invokes AWS Lambda on alert
-- Lambda reads Twilio credentials from AWS SSM Parameter Store and sends SMS/call
-- Fog emits local buzzer alert
-- Built-in web dashboard for logs, alerts, and basic filtering
+- Fog invokes AWS Lambda for notifications
+- Lambda reads Twilio secrets from AWS SSM Parameter Store and sends SMS and call
 
-## Architecture
+Frontend:
+
+- Vite + React dashboard consumes Fog API over CORS
+
+## Deployment Topology
 
 ```text
-IoT Device(s) (Python)
-        |
-        | HTTP POST /ingest
-        v
-Edge Node A/B (FastAPI)
-  - validates + noise filters + pseudonymizes
-        |
-        | HTTP POST /data
-        v
-Fog Node (Go)
-  - alert detection + in-memory logs + dashboard API
-  - writes JSON records to S3
-  - invokes Lambda for alert notifications
-  - local buzzer sound
-        |
-        +--> Web dashboard at /
-        +--> API: /alerts, /logs, /readings, /stats
+System 3 (IoT)                    System 2 (Edge Docker)                    System 1 (Fog k3d)
+----------------                  -----------------------                    -------------------
+iot/device.py  --HTTP /ingest-->  edge-a or edge-b  --HTTP /data-->         fog-service (NodePort 30445)
+                                                                          |-> /alerts /logs /stats /health
+                                                                          |-> S3 logging
+                                                                          |-> Lambda invoke -> Twilio call/SMS
 ```
 
 ## Project Layout
@@ -39,181 +34,209 @@ fec-patient-monitor/
   edge-a/
   edge-b/
   fog/
-    dashboard/index.html
   iot/
+  dashboard/
+    src/
+    package.json
   lambda/notifier/
-    handler.py
+    lambda_function.py
     requirements.txt
+    build-package.sh
+  k8s/
+    fog-deployment.yaml
+    fog-service.yaml
   scripts/
     run-fog-http.sh
     run-edge-a-http.sh
     run-edge-b-http.sh
     run-iot-http.sh
+    run-dashboard.sh
+    trigger-manual-alert.sh
   .env
 ```
 
-## Key Features Implemented
+## Prerequisites
 
-1. HTTP-only data path for LAN systems (no TLS/mTLS required)
-2. S3 logging from Fog for readings, alerts, and log events
-3. Lambda invocation from Fog for every alert
-4. Lambda Twilio notifier using SSM parameter keys
-5. Local buzzer on Fog alert
-6. Web dashboard with filter controls:
-   - pseudo_id filter
-   - alert type filter
-   - severity filter
-   - log kind filter
-   - row limit
+System 1 (Fog):
 
-## Environment Variables
+- Docker Desktop
+- k3d
+- kubectl
 
-The system uses `.env` at repository root.
+System 2 (Edge):
 
-### Fog runtime
+- Docker
 
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `AWS_REGION`
-- `S3_BUCKET_NAME`
-- `ENABLE_S3_LOGGING=true|false`
-- `LAMBDA_FUNCTION_NAME`
-- `ENABLE_LAMBDA_NOTIFICATIONS=true|false`
-- `ENABLE_AUDIO_ALERTS=true|false`
-- `HTTP_PORT` or `PORT`
-- `REFRESH_INTERVAL_SECONDS`
+System 3 (IoT):
 
-### LAN routing helpers
+- Python 3.11+
+- uv (recommended)
 
-- `FOG_HOST`
-- `FOG_PORT`
-- `FOG_URL`
-- `EDGE_A_PORT`
-- `EDGE_B_PORT`
-- `EDGE_A_URL`
-- `EDGE_B_URL`
+Dashboard host (can be any system):
 
-### Lambda SSM parameter-key env vars
+- Node.js 18+
+- npm
 
-These values are parameter names, not secrets:
+## System 1: Run Fog on k3d
 
-- `TWILIO_ACCOUNT_SID_PARAM=/fec/twilio/account-sid`
-- `TWILIO_AUTH_TOKEN_PARAM=/fec/twilio/auth-token`
-- `TWILIO_PHONE_NUMBER_PARAM=/fec/twilio/phone-number`
-- `ALERT_RECIPIENT_PHONE_PARAM=/fec/twilio/recipient-phone`
-
-## Run on 3 Different LAN Systems
-
-### System 1: Fog
+From repository root:
 
 ```bash
 cd fec-patient-monitor
-./scripts/run-fog-http.sh
+
+# Create cluster once (if not already created)
+k3d cluster list | grep -q '^fec ' || k3d cluster create fec --port "30445:30445@loadbalancer"
+
+# Start cluster
+k3d cluster start fec
+
+# Build and import fog image
+docker build -t fec-fog:latest ./fog
+k3d image import fec-fog:latest -c fec
+
+# Deploy fog
+kubectl apply -f k8s/fog-deployment.yaml
+kubectl apply -f k8s/fog-service.yaml
+kubectl rollout status deployment/fog-service --timeout=180s
+
+# Verify
+kubectl get pods -l app=fog-service
+curl http://localhost:30445/health
 ```
 
-Fog endpoints:
+Fog API base URL for other systems:
 
-- `http://<fog-ip>:<HTTP_PORT>/health`
-- `http://<fog-ip>:<HTTP_PORT>/alerts`
-- `http://<fog-ip>:<HTTP_PORT>/logs`
-- `http://<fog-ip>:<HTTP_PORT>/` (dashboard)
+- http://<sys1-lan-ip>:8080
 
-### System 2: Edge (A or B)
+## System 2: Run Edge in Docker
 
-Set `FOG_URL` to fog machine address, for example:
+Edge-A example:
 
 ```bash
-export FOG_URL=http://192.168.1.10:8080/data
-./scripts/run-edge-a-http.sh
+cd fec-patient-monitor
+docker build -t fec-edge-a ./edge-a
+
+docker run -d --name edge-a --restart unless-stopped \
+  -p 8081:8081 \
+  -e PORT=8081 \
+  -e FOG_URL=http://<sys1-lan-ip>:30445/data \
+  fec-edge-a
 ```
 
-or
+Edge-B example:
 
 ```bash
-export FOG_URL=http://192.168.1.10:8080/data
-./scripts/run-edge-b-http.sh
+cd fec-patient-monitor
+docker build -t fec-edge-b ./edge-b
+
+docker run -d --name edge-b --restart unless-stopped \
+  -p 8082:8082 \
+  -e PORT=8082 \
+  -e FOG_URL=http://<sys1-lan-ip>:30445/data \
+  fec-edge-b
 ```
 
-### System 3: IoT
+Verify from System 2:
 
-Point IoT to edge node address:
+```bash
+curl http://localhost:8081/health
+```
+
+## System 3: Run IoT Simulator
+
+Send data to System 2 Edge-A:
 
 ```bash
 cd fec-patient-monitor
 uv run --project iot iot/device.py \
   --device-id device_001 \
-  --edge-url http://192.168.1.11:8081/ingest \
+  --edge-url http://<sys2-lan-ip>:8081/ingest \
   --interval 1
 ```
 
-## Dashboard
+## Dashboard (Vite React + CORS)
 
-Open in browser:
+Run from any system that can reach System 1 Fog API:
 
-```text
-http://<fog-ip>:<HTTP_PORT>/
+```bash
+cd fec-patient-monitor/dashboard
+npm install
+VITE_API_BASE_URL=http://<sys1-lan-ip>:30445 npm run dev -- --host
 ```
 
-It shows:
+Open browser:
 
-- Total readings, alerts, uptime, API status
-- Alerts table
-- Logs table
-- Filter controls
-- Auto refresh based on `REFRESH_INTERVAL_SECONDS`
+- http://<dashboard-host-ip>:5173
+
+Dashboard reads:
+
+- /stats
+- /alerts
+- /logs
+- /config
+
+## Manual Alert Trigger
+
+You can force an alert using abnormal vitals from any machine:
+
+```bash
+cd fec-patient-monitor
+EDGE_URL=http://<sys2-lan-ip>:8081/ingest \
+FOG_ALERTS_URL=http://<sys1-lan-ip>:30445/alerts \
+./scripts/trigger-manual-alert.sh
+```
 
 ## Lambda Notifier Setup
 
-Location: `lambda/notifier/handler.py`
+Location:
 
-1. Create Lambda function (Python 3.11)
-2. Upload code + `twilio` dependency (`requirements.txt`)
-3. Set handler to:
+- lambda/notifier/lambda_function.py
 
-```text
-handler.lambda_handler
+Handler:
+
+- lambda_function.lambda_handler
+
+Build package:
+
+```bash
+cd lambda/notifier
+chmod +x build-package.sh
+./build-package.sh
 ```
 
-4. Configure Lambda environment variables with SSM parameter keys:
+Upload notifier.zip to Lambda and set environment variables to SSM parameter keys:
 
-- `TWILIO_ACCOUNT_SID_PARAM`
-- `TWILIO_AUTH_TOKEN_PARAM`
-- `TWILIO_PHONE_NUMBER_PARAM`
-- `ALERT_RECIPIENT_PHONE_PARAM`
-- Optional: `ENABLE_TWILIO_CALL=true`
+- TWILIO_ACCOUNT_SID_PARAM=/fec/twilio/account-sid
+- TWILIO_AUTH_TOKEN_PARAM=/fec/twilio/auth-token
+- TWILIO_PHONE_NUMBER_PARAM=/fec/twilio/phone-number
+- ALERT_RECIPIENT_PHONE_PARAM=/fec/twilio/recipient-phone
 
-5. Lambda IAM permissions:
+Minimum recommended Lambda timeout:
 
-- `ssm:GetParameters`
-- `kms:Decrypt` (if SecureString uses customer-managed key)
+- 15 seconds
 
-## AWS IAM Notes for Fog Host
+## AWS IAM Requirements
 
-Fog host credentials/role must allow:
+Fog execution identity:
 
-- `s3:PutObject` on your bucket
-- `lambda:InvokeFunction` for your notifier Lambda
+- s3:PutObject on target bucket
+- lambda:InvokeFunction on notifier Lambda
 
-## API Reference (Fog)
+Lambda execution role:
 
-- `POST /data` : ingest edge reading
-- `GET /alerts` : list alerts
-  - query: `type`, `pseudo_id`, `severity`, `limit`
-- `GET /logs` : list log events
-  - query: `kind`, `pseudo_id`, `type`, `limit`
-- `GET /readings` : list readings
-  - query: `pseudo_id`, `limit`
-- `GET /stats` : runtime stats
-- `GET /config` : dashboard refresh config
-- `GET /health` : health
+- ssm:GetParameters
+- kms:Decrypt (if SecureString uses customer-managed KMS key)
 
-## Development Validation
+## Fog API Reference
 
-Fog build and scripts were validated with:
+- POST /data
+- GET /alerts (type, pseudo_id, severity, limit)
+- GET /logs (kind, pseudo_id, type, limit)
+- GET /readings (pseudo_id, limit)
+- GET /stats
+- GET /config
+- GET /health
 
-- `go build ./...` in `fog/`
-- shell syntax checks for all new scripts
+## Security Note
 
-## Important Security Note
-
-If any real AWS or Twilio secrets were exposed previously, rotate them immediately and keep only secret references in Parameter Store.
+If any real AWS or Twilio credentials were exposed during development, rotate them immediately and keep only secure references in SSM Parameter Store.

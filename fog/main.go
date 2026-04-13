@@ -3,10 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"math"
 	"net/http"
@@ -24,9 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/joho/godotenv"
 )
-
-//go:embed dashboard/*
-var dashboardFS embed.FS
 
 const (
 	alertHRHigh   = 100.0
@@ -115,7 +110,7 @@ func main() {
 	mux.HandleFunc("/stats", withCORS(statsHandler))
 	mux.HandleFunc("/config", withCORS(configHandler))
 	mux.HandleFunc("/health", withCORS(healthHandler))
-	attachDashboard(mux)
+	mux.HandleFunc("/", withCORS(rootHandler))
 
 	log.Printf("Fog HTTP server listening on port %s", cfg.HTTPPort)
 	log.Printf("S3 logging=%t bucket=%s", cfg.EnableS3Logging, cfg.S3BucketName)
@@ -549,14 +544,15 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func attachDashboard(mux *http.ServeMux) {
-	sub, err := fs.Sub(dashboardFS, "dashboard")
-	if err != nil {
-		log.Printf("[WARN] dashboard mount skipped: %v", err)
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	fileServer := http.FileServer(http.FS(sub))
-	mux.Handle("/", fileServer)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"service": "fec-fog-api",
+		"message": "Run the Vite dashboard app separately and connect to this API via CORS.",
+	})
 }
 
 func pushWindow(id string, r VitalReading) {

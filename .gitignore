@@ -29,3 +29,8 @@ fog/fog
 lambda/notifier/build/
 lambda/notifier/notifier.zip
 lambda/notifier/.pack-venv/
+
+# ── Vite dashboard artifacts ──
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
